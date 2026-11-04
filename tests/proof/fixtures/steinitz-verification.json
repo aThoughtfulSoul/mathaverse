@@ -1,0 +1,8 @@
+{
+  "method": "Python Fraction exact arithmetic; not Lean kernel verification",
+  "goldenFixtures": 4,
+  "zeroSumSignAssignmentsChecked": 4802,
+  "allPrefixWitnessesAndBoundsPassed": true,
+  "missingZeroSumCounterexampleConfirmed": true,
+  "fixturesSha256": "211ae56a7dc1e963ae2e4685a605c9363251b1404b09d80f28c14f561f1d43dd"
+}

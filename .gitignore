@@ -1,0 +1,31 @@
+# Dependencies and generated builds
+node_modules/
+dist/
+coverage/
+.vite/
+
+# Credentials and local sessions
+.env
+.env.*
+.local/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Captures, device evidence and editing projects
+docs/evidence/
+video/
+*.mp4
+*.mov
+*.webm
+*.wav
+*.aiff
+*.log
+
+# OS/editor caches
+.DS_Store
+__pycache__/
+*.pyc
+.idea/
+.vscode/

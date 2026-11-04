@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b0e15" />
+    <title>The Mathaverse</title>
+    <style>
+      :root { color-scheme: dark; --bg: #0b0e15; --panel: rgba(20, 25, 36, 0.86); --text: #e9edf5; --dim: #9aa3b5; --accent: #ffc95c; --line: #2a3243; }
+      html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; color: var(--text); font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif; }
+      #app { position: fixed; inset: 0; }
+      #hud { position: fixed; left: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 8px; max-width: min(400px, calc(100vw - 24px)); pointer-events: none; }
+      #hud > * { pointer-events: auto; }
+      .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; backdrop-filter: blur(6px); }
+      .title { font-weight: 600; letter-spacing: 0.01em; }
+      .dim { color: var(--dim); }
+      .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+      button { font: inherit; color: var(--text); background: #232b3a; border: 1px solid #34405a; border-radius: 7px; padding: 6px 10px; cursor: pointer; }
+      button:hover { background: #34405a; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      button.primary { background: #3b4a6b; border-color: #5a6c96; }
+      kbd { font: 11px ui-monospace, Menlo, monospace; padding: 1px 4px; border: 1px solid var(--line); border-radius: 4px; color: var(--dim); }
+      #status { font: 11px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+      #hud.compact .intro { display: none; }
+      #errors { color: #ff8fa3; white-space: pre-wrap; display: none; }
+      .ops { display: grid; gap: 2px; margin-top: 6px; }
+      .ops label { display: flex; gap: 6px; align-items: center; color: var(--dim); }
+      .ops label.on { color: var(--text); }
+      #tx-summary:not(:empty) { margin-top: 6px; }
+      #save-status.warn { color: #ffb37a; }
+      #ask-response .src { color: #ffb37a; font-size: 12px; }
+      #ask-response .expl { color: var(--text); }
+      #evidence-list li { margin: 3px 0; color: var(--dim); }
+      #evidence-list li.ok { color: #45d0bf; }
+      #evidence-list li.hist { opacity: 0.6; }
+      #hud { max-height: calc(100vh - 24px); overflow-y: auto; }
+      .demo-tab[aria-pressed="true"] { background: #3b4a6b; border-color: #ffc95c; }
+      body:not(.demo-pq) .pq-only, body:not(.demo-pq) .pq-only-inline { display: none; }
+      body:not(.demo-order) .order-only { display: none; }
+      body:not(.domain-new) .four-only { display: none; }
+      body.domain-new .linear-only { display: none; }
+      #demo-card .row { flex-wrap: wrap; }
+      body.capture #hud { display: none; }
+      /* The refined UI (src/ui/shell): the fallback HUD is replaced; diagnostics are developer-only (?debug=1, H). */
+      #shell { position: fixed; inset: 0; pointer-events: none; }
+      body.new-ui #hud { display: none; }
+      #diagnostics { position: fixed; left: 12px; bottom: 12px; z-index: 50; display: flex; flex-direction: column; gap: 6px; max-width: min(460px, calc(100vw - 24px)); pointer-events: none; }
+      #diagnostics > * { pointer-events: auto; }
+      body:not(.debug) #status { display: none; }
+      /* With the refined UI, diagnostics and errors sit at the top centre, clear of the toolbar and the context card. */
+      body.new-ui #diagnostics { top: 12px; bottom: auto; left: 50%; transform: translateX(-50%); }
+      /* With the refined UI, errors are reported in the shell's notice; the error log shows with the diagnostics. */
+      body.new-ui:not(.debug) #errors { display: none !important; }
+      /* ?clean=1 hides the shell's chrome through body.clean-stage (the stage itself stays); in a session the
+         spatial shell is the interface. */
+      body.presenting #shell { display: none; }
+      #order-routes div { margin: 2px 0; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hud">
+      <div class="card intro">
+        <div class="title" id="intro-title">What a linear map loses <span class="dim">· reusable representation</span></div>
+        <div class="dim" id="intro-text">Drag the white point along its rose fiber; then use the same recipe on Q. Right-drag or drag empty space to orbit; wheel zooms.</div>
+      </div>
+      <div class="card" id="demo-card">
+        <div class="row"><span class="title">Demonstration</span>
+          <button id="demo-pq" class="demo-tab">P → Q: what a map loses</button>
+          <button id="demo-order" class="demo-tab">Does order matter?</button>
+          <button id="demo-sculpture" class="demo-tab">C₄ vs V₄ sculpture</button>
+          <button id="demo-cube" class="demo-tab">Cube ↔ four diagonals</button>
+          <button id="demo-quotient" class="demo-tab">24 rotations → 6 classes</button>
+          <button id="demo-braid" class="demo-tab">Braids</button>
+          <button id="demo-proof" class="demo-tab">Proof: rearranging a walk</button>
+        </div>
+      </div>
+      <div class="card row">
+        <button id="enter-xr" class="primary" disabled>Enter VR</button>
+        <button id="enter-passthrough" disabled title="Your room behind the workbench (WebXR immersive-ar)">Enter passthrough</button>
+        <button id="enable-voice" title="Ask for the microphone now (nothing is recorded or sent); Enter VR works without it">Enable voice</button>
+        <span class="dim" id="voice-permission"></span>
+        <span class="dim"><kbd>Space</kbd> play/pause · <kbd>R</kbd> replay · <kbd>M</kbd> mode · <kbd>Z</kbd> undo · hold <kbd>T</kbd> talk · <kbd>H</kbd> details</span>
+      </div>
+      <div class="card" id="workspace-card">
+        <div class="row"><span class="title">Workspace</span><span class="dim" id="save-status">not saved yet</span></div>
+        <div class="row" style="margin-top:6px">
+          <button id="save">Save</button>
+          <button id="reopen">Reopen saved</button>
+          <button id="export">Export JSON</button>
+          <button id="import">Import JSON</button>
+          <input id="import-file" type="file" accept="application/json,.json" hidden />
+        </div>
+      </div>
+      <div class="card" id="recipe-card">
+        <div class="row"><span class="title">Representation</span><span class="dim" id="recipe-name"></span></div>
+        <div id="recipe-ops" class="ops pq-only"></div>
+        <div class="row pq-only" style="margin-top:6px">
+          <button id="recipe-save">Save as new recipe</button>
+          <button id="rebind" class="primary">Use on Q</button>
+        </div>
+        <div class="order-only" id="order-routes" style="margin-top:6px"></div>
+        <div class="row order-only" style="margin-top:6px">
+          <button id="reverse-left" class="primary">Reverse left order</button>
+          <button id="reverse-right">Reverse right order</button>
+          <button id="replay-compare">Replay comparison</button>
+        </div>
+        <div class="four-only" id="four-status" style="margin-top:6px"></div>
+        <div class="row four-only" style="margin-top:6px">
+          <button id="four-extra" class="primary">…</button>
+          <button id="four-reset">Reset</button>
+          <button id="four-replay">Replay</button>
+        </div>
+        <div class="row" style="margin-top:6px"><button id="undo-btn">Undo</button></div>
+        <div class="dim" id="tx-summary"></div>
+      </div>
+      <div class="card" id="assistant-card">
+        <div class="row"><span class="title">Ask</span><span class="dim" id="ask-mode">assistant: checking…</span></div>
+        <div class="row" style="margin-top:6px">
+          <input id="ask-text" type="text" maxlength="2000" placeholder="e.g. Use this representation on Q" style="flex:1;min-width:0;font:inherit;color:var(--text);background:#151a26;border:1px solid #34405a;border-radius:7px;padding:6px 8px" />
+          <button id="ask" class="primary">Ask</button>
+          <button id="ask-cancel" disabled>Cancel</button>
+        </div>
+        <div id="ask-status" class="dim" style="margin-top:6px"></div>
+        <div id="ask-response" style="margin-top:4px"></div>
+        <div class="row" style="margin-top:6px"><button id="ask-retry" hidden>Retry with the current workspace</button><button id="ask-undo" hidden>Undo</button></div>
+      </div>
+      <div id="voice-slot" style="display:contents"></div>
+      <div class="card linear-only" id="evidence-card">
+        <div class="row"><span class="title">Evidence</span><span class="dim" id="lean-mode">Lean: checking…</span></div>
+        <div class="row" style="margin-top:6px">
+          <button id="check-same" class="pq-only-inline">Same image: selected pair</button>
+          <button id="check-diff">The two maps differ on e₁</button>
+          <button id="check-eq">Are the two maps equal?</button>
+        </div>
+        <ol id="evidence-list" style="margin:6px 0 0;padding-left:18px"></ol>
+      </div>
+    </div>
+    <div id="shell"></div>
+    <div id="diagnostics">
+      <div class="card" id="status">loading…</div>
+      <div class="card" id="errors"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

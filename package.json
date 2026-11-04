@@ -1,0 +1,44 @@
+{
+  "name": "mathaverse",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "An interactive mathematical workspace for desktop and WebXR, powered by Meta Muse and exact mathematical computation.",
+  "scripts": {
+    "postinstall": "node patches/manim-web-0.40.1-nested-svg.mjs",
+    "patch:check": "node patches/manim-web-0.40.1-nested-svg.mjs --check",
+    "dev": "vite --port 3010 --strictPort --host",
+    "dev:local": "vite --port 3010 --strictPort --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --port 3010 --strictPort --host",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "headset": "node --experimental-websocket scripts/headset.mjs"
+  },
+  "dependencies": {
+    "manim-web": "0.40.1",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "@types/three": "0.186.0",
+    "iwer": "2.7.0",
+    "typescript": "5.8.3",
+    "vite": "6.4.5",
+    "vitest": "3.2.7"
+  },
+  "overrides": {
+    "three": "0.186.1"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aThoughtfulSoul/mathaverse.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aThoughtfulSoul/mathaverse/issues"
+  }
+}
