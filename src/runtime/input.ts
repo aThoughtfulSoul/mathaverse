@@ -35,6 +35,8 @@ export type PoseQuality = 'tracked' | 'emulated' | 'none'
  * corrects a reacquired controller over its first frames: re-anchoring a drag on the first tracked frame
  * let the preview jump more than 5 units within two frames (device finding, R6 C2). */
 export const POSE_SETTLE = 0.25
+/** The thumbstick's dead zone (a resting Quest stick reads a few hundredths off zero). */
+export const STICK_DEAD = 0.15
 
 export interface Pointer {
   id: PointerId
@@ -55,6 +57,9 @@ export interface Pointer {
   /** The controller's grip pose for grab-style moves (equal to the ray pose for the mouse). */
   gripPosition: Vector3
   gripQuaternion: Quaternion
+  /** The thumbstick's vertical deflection this frame (xr-standard axis 3: -1 pushed up/forward, 1 pulled down), with
+   * a dead zone removed and rescaled; 0 for the mouse, a resting stick or an untracked controller. */
+  stickY: number
 }
 
 export interface QueuedEvent {
@@ -119,7 +124,7 @@ export class Input {
       dragging: false, lastX: 0, lastY: 0, moved: 0,
     }
     for (const id of ['mouse', 'left', 'right'] as const) {
-      this.pointers.set(id, { id, active: false, connected: false, rayValid: false, gripValid: false, rayPose: 'none', gripPose: 'none', origin: new Vector3(), direction: new Vector3(0, 0, -1), gripPosition: new Vector3(), gripQuaternion: new Quaternion() })
+      this.pointers.set(id, { id, active: false, connected: false, rayValid: false, gripValid: false, rayPose: 'none', gripPose: 'none', origin: new Vector3(), direction: new Vector3(0, 0, -1), gripPosition: new Vector3(), gripQuaternion: new Quaternion(), stickY: 0 })
     }
     for (let i = 0; i < 2; i++) this.slots.push(this.makeSlot(i, scene))
     this.bindMouse()
@@ -151,6 +156,7 @@ export class Input {
     // The XRFrame is only valid inside the host's animation-loop callback, which is where update() runs.
     const frame = presenting ? this.renderer.xr.getFrame?.() : null
     const space = frame ? this.renderer.xr.getReferenceSpace() : null
+    for (const p of this.pointers.values()) p.stickY = 0
     for (const slot of this.slots) {
       const show = presenting && slot.source !== null && slot.source.targetRayMode === 'tracked-pointer'
       if (!show || !slot.handedness) {
@@ -192,6 +198,9 @@ export class Input {
       const bDown = pads[5]?.pressed ?? false
       if (bDown && !slot.prevButtons[5]) this.queue.push({ pointer: slot.handedness, kind: 'buttonB' })
       slot.prevButtons[5] = bDown
+      // The thumbstick (xr-standard axes 2/3), vertical only: scrolling a panel the controller points at.
+      const sy = p.rayValid ? (slot.source?.gamepad?.axes?.[3] ?? 0) : 0
+      p.stickY = Math.abs(sy) < STICK_DEAD ? 0 : (Math.sign(sy) * (Math.abs(sy) - STICK_DEAD)) / (1 - STICK_DEAD)
     }
     const out = this.queue
     this.queue = []

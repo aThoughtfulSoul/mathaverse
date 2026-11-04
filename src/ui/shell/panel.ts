@@ -13,6 +13,8 @@ import { hitAt, wrapText, type HitRegion } from './logic'
 
 /** Canvas pixels per metre (about 1.5x a Quest 3S pixel at 0.8 m; mipmapped). */
 export const PX = 2000
+/** Application cap for each canvas side in pixels; begin() lowers the density above it. */
+export const MAX_TEXTURE = 4096
 export const FONT = `system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif`
 export const MATH_FONT = `'STIX Two Math', 'Cambria Math', 'Latin Modern Math', Georgia, 'Times New Roman', serif`
 /** Panels draw before default content (assistant meshes, formulas) and after the passthrough backdrop (-10). */
@@ -153,6 +155,11 @@ export class CanvasPanel {
   key = ''
   shown = false
   redraws = 0
+  /** The shown band of a taller drawing (a scrolling view): its top (metres into the drawing) and height; null shows
+   * the whole drawing. Moving it slides the texture window only: nothing is redrawn. Hits, picks and the hover
+   * highlight use drawing coordinates throughout (intersect() adds viewTop). */
+  viewTop = 0
+  viewH: number | null = null
 
   constructor(readonly name: string) {
     this.group.name = name
@@ -181,10 +188,12 @@ export class CanvasPanel {
     return this.painter
   }
 
-  /** Resize to w x h metres, clear, and return the painter. */
+  /** Resize to w x h metres, clear, and return the painter. A drawing taller (or wider) than MAX_TEXTURE pixels at
+   * PX is drawn at a lower density (the painter still works in PX units, under a scale), so it fits a GPU texture. */
   begin(w: number, h: number): Painter {
-    const W = Math.max(4, Math.ceil(w * PX))
-    const H = Math.max(4, Math.ceil(h * PX))
+    const k = Math.min(1, MAX_TEXTURE / (Math.max(w, h) * PX))
+    const W = Math.max(4, Math.ceil(w * PX * k))
+    const H = Math.max(4, Math.ceil(h * PX * k))
     // A resized canvas needs fresh GPU storage (see PlainText in textSlot.ts).
     if (W !== this.canvas.width || H !== this.canvas.height) {
       this.texture.dispose()
@@ -193,6 +202,7 @@ export class CanvasPanel {
     }
     this.ctx.setTransform(1, 0, 0, 1, 0, 0)
     this.ctx.clearRect(0, 0, W, H)
+    this.ctx.setTransform(k, 0, 0, k, 0, 0)
     this.width = w
     this.height = h
     this.hits = []
@@ -201,9 +211,29 @@ export class CanvasPanel {
 
   end(): void {
     this.texture.needsUpdate = true
-    this.mesh.scale.set(this.width, this.height, 1)
-    this.mesh.position.set(this.width / 2, -this.height / 2, 0)
+    this.applyView()
     this.redraws++
+  }
+
+  /** Show the band [top, top + height] of the drawing (clamped to it); height null shows the whole drawing. */
+  setView(top: number, height: number | null): void {
+    this.viewH = height === null || height >= this.height ? null : height
+    this.viewTop = this.viewH === null ? 0 : Math.max(0, Math.min(this.height - this.viewH, top))
+    this.applyView()
+  }
+
+  /** The shown height (the view's, or the whole drawing's). */
+  get shownHeight(): number {
+    return this.viewH ?? this.height
+  }
+
+  private applyView(): void {
+    const h = this.shownHeight
+    this.mesh.scale.set(this.width, h, 1)
+    this.mesh.position.set(this.width / 2, -h / 2, 0)
+    const H = this.height || 1
+    this.texture.repeat.set(1, h / H)
+    this.texture.offset.set(0, 1 - (this.viewTop + h) / H) // flipY: v = 1 is the drawing's top
   }
 
   /** The standard backing plate: dark, slightly translucent, hairline border (legible over passthrough). */
@@ -247,10 +277,10 @@ export class CanvasPanel {
     if (t < 0) return false
     const x = LOCAL.origin.x + t * LOCAL.direction.x
     const y = -(LOCAL.origin.y + t * LOCAL.direction.y)
-    if (x < 0 || x > this.width || y < 0 || y > this.height) return false
+    if (x < 0 || x > this.width || y < 0 || y > this.shownHeight) return false
     P.set(x, -y, 0).applyMatrix4(this.group.matrixWorld)
     out.x = x
-    out.y = y
+    out.y = y + this.viewTop // drawing coordinates (a scrolled view shows the drawing from viewTop)
     out.distance = P.distanceTo(ray.origin)
     return true
   }
@@ -307,8 +337,14 @@ export class HoverOverlay {
 
   /** Place over region r of panel (enabled regions glow brighter than disabled ones). */
   show(panel: CanvasPanel, r: HitRegion, tint = 0xffffff): void {
+    // A scrolled panel: the region sits viewTop higher; a region scrolled out of the view has no highlight.
+    const top = panel.viewTop
+    if (r.y + r.h <= top || r.y >= top + panel.shownHeight) {
+      this.hide()
+      return
+    }
     if (this.mesh.parent !== panel.group) panel.group.add(this.mesh)
-    this.mesh.position.set(r.x + r.w / 2, -(r.y + r.h / 2), 0.0009)
+    this.mesh.position.set(r.x + r.w / 2, -(r.y - top + r.h / 2), 0.0009)
     this.mesh.scale.set(r.w, r.h, 1)
     const u = this.mat.uniforms
     ;(u.size!.value as number[])[0] = r.w

@@ -144,6 +144,10 @@ describe('spatial layout helpers', () => {
     expect(pages).toEqual([[0], [1, 2], [3]])
     expect(pages.flat()).toEqual([0, 1, 2, 3])
   })
+  it('keeps a heading with a first item too tall for a page (the page scrolls), never alone', () => {
+    expect(paginate([{ height: 1, keepWithNext: true }, { height: 9 }, { height: 2 }], 5)).toEqual([[0, 1], [2]])
+    expect(paginate([{ height: 2 }, { height: 1, keepWithNext: true }, { height: 9 }], 5)).toEqual([[0], [1, 2]])
+  })
   it('a disabled region is hover-only and says why', () => {
     const r: HitRegion = { id: 'shell:tb:play', x: 0, y: 0, w: 1, h: 1, r: 0, enabled: false, command: { kind: 'playPause' }, hint: 'Nothing to play yet' }
     expect(regionPick(r, 0.8)).toEqual({ id: 'shell:tb:play', distance: 0.8, command: null, hint: 'Nothing to play yet' })

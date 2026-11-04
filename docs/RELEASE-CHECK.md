@@ -2,6 +2,17 @@
 
 4 November 2026 · Apple silicon macOS, Node 20.19.5
 
+## Scrolling update
+
+The mathematics inspector now scrolls long claims and receipts with a controller thumbstick while its ray points at the panel. The content window, hit targets, hover highlights and scrollbar move together; oversized sections keep their heading on the same page. The README describes the controls.
+
+- `npm run typecheck`: passed.
+- `npm test -- tests/ui/shell tests/runtime tests/ui/assistant tests/ui/orb`: 398 tests passed across 25 files, including six scrolling tests and the heading-pagination regression.
+- `npm run build`: passed with the existing MathJax chunk-size warning.
+- `git diff --check`: passed.
+
+These are automated checks of this update; no new headset session or live API call was performed. The complete-suite results below describe the initial release checks.
+
 ## Automated verification
 
 | Check | Result |

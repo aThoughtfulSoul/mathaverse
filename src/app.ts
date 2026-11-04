@@ -35,6 +35,8 @@ export interface SpatialShellHost {
   setVisible(v: boolean): void
   /** The shell's own presses that are not UiCommands (e.g. mathematics page turns); true when handled. */
   press?(id: string): boolean
+  /** Thumbstick scrolling of the mathematics inspector the ray points at (stick: -1 up .. 1 down); true when taken. */
+  scrollMath?(ray: RayT, stick: number, dt: number): boolean
   dispose(): void
 }
 import { comparisonOf } from './recipes/recipe'
@@ -757,6 +759,8 @@ export class App {
       if (!p.active) continue
       const c = this.updateHover(p)
       if (c) hoveredControls.push(c)
+      // the thumbstick scrolls the mathematics inspector while this controller points at it
+      if (p.stickY && this.host.presenting) this.spatialShell?.shell.scrollMath?.(this.rayOf(p), p.stickY, ctx.dt)
     }
     this.controls.setHover(hoveredControls)
     for (const e of events) this.onEvent(e.pointer, e.kind)

@@ -791,6 +791,15 @@ const dev = {
       c.updateButtonValue(id, value)
       await waitFrames(frames)
     },
+    /** Hold the emulated thumbstick at vertical deflection y (-1 up .. 1 down) for `frames`, then release it. */
+    async stick(hand: Hand, y: number, frames = 30) {
+      const c = getEmulator()?.controllers[hand]
+      if (!c) throw new Error('no emulated controller')
+      c.updateAxes('thumbstick', 0, y)
+      await waitFrames(frames)
+      c.updateAxes('thumbstick', 0, 0)
+      await waitFrames(2)
+    },
   },
   /** Record the canvas (both eyes when presenting in the emulator) and save it via the dev server. */
   async record(seconds = 10, name = 'capture') {

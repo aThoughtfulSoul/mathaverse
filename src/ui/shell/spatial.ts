@@ -22,7 +22,7 @@
 // the shell returns the UiCommand the coordinator dispatches (null for hover-only and disabled entries, with a
 // hint). press(id) handles the shell's own page turns in the mathematics inspector.
 
-import { Group, Vector3, type Material, type Object3D, type Ray } from 'three'
+import { Group, Mesh, MeshBasicMaterial, PlaneGeometry, Vector3, type Material, type Object3D, type Ray } from 'three'
 import type { FrameContext } from '../../runtime/host'
 import { TextSlot } from '../../rendering/textSlot'
 import type {
@@ -36,7 +36,7 @@ import {
   mathToggleLabel, moreCommand, moreSections, paginate, regionPick, toolbarCommand, toolbarDescription, toolbarWidestLabel,
   type HitRegion,
 } from './logic'
-import { CanvasPanel, HoverOverlay, MATH_FONT, PX, type Painter } from './panel'
+import { CanvasPanel, HoverOverlay, MATH_FONT, PANEL_ORDER, PX, type Painter } from './panel'
 import { assistantView } from '../assistant/view'
 import { EXPERIMENT_ICONS, type IconName } from './icons'
 import { XR_ORB, XrOrb } from '../orb/xr'
@@ -81,6 +81,11 @@ export const SPATIAL_LAYOUT = {
    * it fades out over `seconds` when the inspector opens and back in when it closes, and it is not pickable from the
    * moment it starts fading out until it starts fading back in. It never moves. */
   contextFade: { seconds: 0.3 },
+  /** The mathematics inspector scrolls when a page is taller than its view (one block taller than a page, such as a
+   * Lean claim with its receipt): the thumbstick, while the controller points at the inspector, scrolls at up to
+   * `speed` metres of content a second (the square of its deflection, so small pushes are fine); a scrollbar
+   * `thumbW` wide shows where the view is. Pages that fit never scroll. */
+  mathScroll: { speed: 0.55, thumbW: 0.005 },
 } as const
 
 /** Font sizes (em, metres). Buttons and status are at least 17.5 mm (Quest 3S: 19.5 mm captions comfortable). */
@@ -105,6 +110,8 @@ const EVIDENCE_STATUS: Record<EvidenceItem['status'], [string, string]> = {
 const PROV_COLOR: Record<string, string> = { 'computed exactly': C.blue, 'checked by supported rewrite rules': C.violet, 'Lean receipt': C.teal, presentation: C.faint }
 
 const PAD = 0.016
+/** The inspector frame's title bar height (the mathematics view starts under it). */
+const MATH_TITLE_H = 0.066
 const CHECK = 'M5.5 12.5l4.2 4.2L18.5 7.8'
 
 /** Ease in and out (cubic), t in [0, 1]. */
@@ -151,6 +158,11 @@ export class SpatialShell {
   private readonly picker = new CanvasPanel('shell:picker')
   private readonly more = new CanvasPanel('shell:more')
   private readonly frame = new CanvasPanel('shell:inspector')
+  /** The mathematics inspector's content, drawn whole into its own canvas and shown through the frame's view (it
+   * scrolls when a page is taller than the view); in front of the frame plate. */
+  private readonly mathContent = new CanvasPanel('shell:math-content')
+  /** The mathematics view's scrollbar thumb (over a track drawn on the frame); only while the content scrolls. */
+  private readonly mathThumb: Mesh
   private readonly tooltip = new CanvasPanel('shell:tooltip')
   /** "Hold A to talk" above the orb (SPATIAL_LAYOUT.orbHint); only with the orb. */
   private readonly orbHint = new CanvasPanel('shell:orb-hint')
@@ -167,6 +179,12 @@ export class SpatialShell {
   private mathPages = 1
   private mathKey = ''
   private mathDetailKey = ''
+  /** The mathematics view: its scroll (metres into the page's content), the most it can scroll (0: the page fits),
+   * the view's height (null: the page fits and is shown whole) and the frame's width (for the scrollbar). */
+  private mathScroll = 0
+  private mathScrollMax = 0
+  private mathView: number | null = null
+  private mathW = 0
   private readonly hit = { x: 0, y: 0, distance: 0 }
   /** The assistant's glyph orb (shown with the assistant inspector) and its state source. */
   private readonly orb: XrOrb | null
@@ -200,10 +218,17 @@ export class SpatialShell {
     this.root.name = 'shell'
     this.inspectorGroup.name = 'shell:inspector-area'
     this.assistantGroup.name = 'shell:assistant-content'
-    this.inspectorGroup.add(this.frame.group, this.assistantGroup)
+    this.inspectorGroup.add(this.frame.group, this.mathContent.group, this.assistantGroup)
+    const thumbMat = new MeshBasicMaterial({ color: 0xa9b6d6, transparent: true, opacity: 0.6, depthWrite: false, toneMapped: false })
+    thumbMat.userData.ownDepth = true
+    this.mathThumb = new Mesh(new PlaneGeometry(1, 1), thumbMat)
+    this.mathThumb.name = 'shell:math-scrollbar'
+    this.mathThumb.renderOrder = PANEL_ORDER + 1
+    this.mathThumb.visible = false
+    this.frame.group.add(this.mathThumb)
     this.root.add(this.header.group, this.context.group, this.toolbar.group, this.picker.group, this.more.group, this.inspectorGroup)
     this.tooltip.mesh.renderOrder = -2
-    this.pickable = [this.picker, this.more, this.frame, this.toolbar, this.context, this.header]
+    this.pickable = [this.picker, this.more, this.mathContent, this.frame, this.toolbar, this.context, this.header]
     const L = SPATIAL_LAYOUT
     this.header.group.position.set(L.header.left, L.header.top, L.header.z)
     this.header.group.rotation.x = L.header.tilt
@@ -325,6 +350,7 @@ export class SpatialShell {
     const next = Math.max(0, Math.min(this.mathPages - 1, this.mathPage + (id === 'shell:math:next' ? 1 : -1)))
     if (next !== this.mathPage && this.view) {
       this.mathPage = next
+      this.mathScroll = 0 // a new page opens at its top
       this.mathKey = ''
       this.drawInspector(this.view)
       const h = this.hoverId
@@ -332,6 +358,51 @@ export class SpatialShell {
       this.setHover(h)
     }
     return true
+  }
+
+  /**
+   * Scroll the mathematics inspector with a thumbstick: `stick` is its vertical deflection (-1 up to 1 down, dead zone
+   * already applied), for `dt` seconds, while `ray` points at the inspector. Moves only the content's view (nothing is
+   * redrawn). Returns true when the ray is on a scrolling inspector (the stick is then the inspector's).
+   */
+  scrollMath(ray: Ray, stick: number, dt: number): boolean {
+    if (!this.visible || this.view?.inspector !== 'math' || this.mathScrollMax <= 0 || !stick) return false
+    if (!this.frame.intersect(ray, this.hit)) return false
+    const d = Math.min(0.1, Math.max(0, Number.isFinite(dt) ? dt : 0))
+    const next = Math.max(0, Math.min(this.mathScrollMax, this.mathScroll + Math.sign(stick) * stick * stick * SPATIAL_LAYOUT.mathScroll.speed * d))
+    if (next !== this.mathScroll) {
+      this.mathScroll = next
+      this.applyMathScroll()
+    }
+    return true
+  }
+
+  /** The content's view at the current scroll: the texture window, the formulas (hidden outside the view), the
+   * scrollbar, and the hover highlight on the hovered entry (it moves with the content, or goes when scrolled out). */
+  private applyMathScroll(): void {
+    const view = this.mathView
+    this.mathContent.setView(this.mathScroll, view)
+    const TITLE_H = MATH_TITLE_H
+    for (const f of this.formulas) {
+      if (!f.used) continue
+      const yv = f.y - this.mathScroll
+      f.slot.anchor.position.y = -(TITLE_H + yv)
+      f.slot.anchor.visible = view === null || (yv >= 0.012 && yv <= view - 0.012)
+    }
+    const S = SPATIAL_LAYOUT.mathScroll
+    this.mathThumb.visible = view !== null && this.mathContent.shown
+    if (view !== null) {
+      const trackTop = TITLE_H + 0.012
+      const track = view - 0.024
+      const total = this.mathScrollMax + view
+      const len = Math.max(0.03, (track * view) / total)
+      const top = trackTop + (track - len) * (this.mathScrollMax ? this.mathScroll / this.mathScrollMax : 0)
+      this.mathThumb.scale.set(S.thumbW, len, 1)
+      this.mathThumb.position.set(this.mathW - PAD * 0.55, -(top + len / 2), 0.0016)
+    }
+    const h = this.hoverId
+    this.hoverId = null
+    this.setHover(h)
   }
 
   setHover(id: string | null): void {
@@ -354,7 +425,9 @@ export class SpatialShell {
   }
 
   dispose(): void {
-    for (const p of [this.header, this.context, this.toolbar, this.picker, this.more, this.frame, this.tooltip, this.orbHint]) p.dispose()
+    for (const p of [this.header, this.context, this.toolbar, this.picker, this.more, this.frame, this.mathContent, this.tooltip, this.orbHint]) p.dispose()
+    this.mathThumb.geometry.dispose()
+    ;(this.mathThumb.material as Material).dispose()
     for (const f of this.formulas) f.slot.dispose()
     this.formulas.length = 0
     this.overlay.dispose()
@@ -375,7 +448,10 @@ export class SpatialShell {
     }))
     const orb = this.orb ? this.orbReport(this.orb) : null
     return {
-      visible: this.visible, panels, mathPage: this.mathPage, mathPages: this.mathPages, formulas: this.formulas.filter((f) => f.used).map((f) => f.slot.report()), orb,
+      visible: this.visible, panels, mathPage: this.mathPage, mathPages: this.mathPages,
+      // the mathematics view: its scroll, how far it can scroll (0: the page fits), the view's and the content's heights
+      mathScroll: { scroll: +this.mathScroll.toFixed(4), max: +this.mathScrollMax.toFixed(4), view: this.mathView === null ? null : +this.mathView.toFixed(4), content: +this.mathContent.height.toFixed(4), thumb: this.mathThumb.visible },
+      formulas: this.formulas.filter((f) => f.used).map((f) => f.slot.report()), orb,
       lowered: { at: +this.lowerAt.toFixed(4), to: this.lowerTo, moving: this.lowerT < 1 },
       context: { opacity: +this.fadeAt.toFixed(4), to: this.fadeTo, moving: this.fadeT < 1, pickable: this.fadeTo === 1 },
     }
@@ -992,6 +1068,10 @@ export class SpatialShell {
   private drawInspector(v: UiView): void {
     const which = v.inspector
     this.frame.setShown(which !== null)
+    if (which !== 'math') {
+      this.mathContent.setShown(false)
+      this.mathThumb.visible = false
+    }
     if (!which) {
       this.releaseFormulas(0)
       return
@@ -999,13 +1079,14 @@ export class SpatialShell {
     const T = SPATIAL_TYPE
     const L = SPATIAL_LAYOUT.inspector
     const W = Math.max(L.width, this.assistant.width + 2 * PAD)
-    const TITLE_H = 0.066
+    const TITLE_H = MATH_TITLE_H
     const f = inspectorFrame(which)
     if (which === 'assistant') {
       const key = JSON.stringify(['assistant', W, this.assistant.height])
       this.releaseFormulas(0)
       this.mathKey = ''
       this.mathDetailKey = ''
+      this.mathScroll = 0
       if (key === this.frame.key) return
       this.frame.key = key
       const h = TITLE_H + this.assistant.height + PAD
@@ -1016,11 +1097,14 @@ export class SpatialShell {
       this.assistantGroup.position.set((W - this.assistant.width) / 2, -TITLE_H, 0.0015)
       return
     }
-    // Mathematics: sections laid out as blocks and paged to the reserved height (never cut, never shrunk).
+    // Mathematics: sections laid out as blocks and paged to the reserved height (never cut, never shrunk). The page's
+    // content is drawn whole into its own panel and shown through a view under the title; a page taller than the view
+    // (a single block taller than a page, such as a Lean claim with its receipt) scrolls (scrollMath).
     const detailKey = JSON.stringify(v.presentation.detail)
     if (detailKey !== this.mathDetailKey) {
       this.mathDetailKey = detailKey
       this.mathPage = 0
+      this.mathScroll = 0
     }
     const key = `${detailKey}\u0000${this.mathPage}`
     if (key === this.mathKey && this.frame.key === 'math') return
@@ -1029,24 +1113,42 @@ export class SpatialShell {
     const CW = W - 2 * PAD
     const blocks = this.mathBlocks(v.presentation.detail.sections, CW)
     const PAGER_H = 0.054
-    const maxContent = L.maxHeight - TITLE_H - PAD - PAGER_H
-    const pages = paginate(blocks, maxContent)
+    const VIEW = L.maxHeight - TITLE_H - PAD - PAGER_H
+    const pages = paginate(blocks, VIEW)
     this.mathPages = pages.length
     this.mathPage = Math.min(this.mathPage, pages.length - 1)
     const page = pages[this.mathPage]!
-    const contentH = page.reduce((a, i) => a + blocks[i]!.height, 0)
+    const contentH = Math.max(page.reduce((a, i) => a + blocks[i]!.height, 0), 0.05)
+    const scrolls = contentH > VIEW + 1e-6
     const pager = pages.length > 1
-    const h = TITLE_H + Math.max(contentH, 0.05) + (pager ? PAGER_H : 0) + PAD
+    const footer = pager || scrolls
+    const h = TITLE_H + (scrolls ? VIEW : contentH) + (footer ? PAGER_H : 0) + PAD
+    // the content (its hits and formulas in content coordinates, from the view's top)
+    const c = this.mathContent.begin(W, contentH)
+    const placed: { tex: string; plain: string; x: number; y: number; maxW: number }[] = []
+    let y = 0
+    for (const i of page) {
+      blocks[i]!.draw(c, PAD, y, CW, this.mathContent.hits, placed)
+      y += blocks[i]!.height
+    }
+    if (!page.length) c.text('No mathematical detail for this view.', PAD, 0.02, T.detail, C.dim)
+    this.mathContent.end()
+    this.mathContent.group.position.set(0, -TITLE_H, 0.0012)
+    this.mathContent.setShown(true)
+    this.mathW = W
+    this.mathView = scrolls ? VIEW : null
+    this.mathScrollMax = scrolls ? contentH - VIEW : 0
+    this.mathScroll = Math.min(this.mathScroll, this.mathScrollMax)
+    // the frame: plate, title, the scrollbar's track, the pager or the scroll hint
     const p = this.frame.begin(W, h)
     this.frame.plate(p, { radius: 0.022 })
     this.drawFrameTitle(p, W, TITLE_H, f.title, f.close, null, C.gold)
-    const placed: { tex: string; plain: string; x: number; y: number; maxW: number }[] = []
-    let y = TITLE_H
-    for (const i of page) {
-      blocks[i]!.draw(p, PAD, y, CW, this.frame.hits, placed)
-      y += blocks[i]!.height
+    if (scrolls) p.rrect(W - PAD * 0.55 - SPATIAL_LAYOUT.mathScroll.thumbW / 2, TITLE_H + 0.012, SPATIAL_LAYOUT.mathScroll.thumbW, VIEW - 0.024, 0.0025, 'rgba(160, 178, 214, 0.14)')
+    if (scrolls && !pager) {
+      const py = h - PAD - PAGER_H + 0.008
+      p.line(PAD, py - 0.004, W - PAD, py - 0.004, C.line, 0.0008)
+      p.text('Scroll with the thumbstick', W / 2, py + 0.024, T.small, C.dim, { align: 'center' })
     }
-    if (!page.length) p.text('No mathematical detail for this view.', PAD, TITLE_H + 0.02, T.detail, C.dim)
     if (pager) {
       const py = h - PAD - PAGER_H + 0.008
       p.line(PAD, py - 0.004, W - PAD, py - 0.004, C.line, 0.0008)
@@ -1062,12 +1164,13 @@ export class SpatialShell {
       p.text('Next', W - PAD - bw + 0.018, py + 0.024, T.secondary, C.text, { weight: 500 })
       p.icon('chevronRight', W - PAD - 0.026, py + 0.024 - 0.009, 0.018, C.text, 2)
       p.ctx.globalAlpha = 1
-      p.text(`Page ${this.mathPage + 1} of ${pages.length}`, W / 2, py + 0.024, T.small, C.dim, { align: 'center' })
+      p.text(`Page ${this.mathPage + 1} of ${pages.length}${scrolls ? ' · scrolls' : ''}`, W / 2, py + 0.024, T.small, C.dim, { align: 'center' })
       this.frame.hits.push({ id: 'shell:math:prev', x: PAD, y: py + 0.004, w: bw, h: 0.04, r: 0.011, enabled: prevOn, command: null, hint: prevOn ? 'Previous page' : 'First page' })
       this.frame.hits.push({ id: 'shell:math:next', x: W - PAD - bw, y: py + 0.004, w: bw, h: 0.04, r: 0.011, enabled: nextOn, command: null, hint: nextOn ? 'Next page' : 'Last page' })
     }
     this.frame.end()
     this.placeFormulas(placed)
+    this.applyMathScroll()
   }
 
   private drawFrameTitle(p: Painter, W: number, TITLE_H: number, title: string, close: string, icon: IconName | null, accent: string): void {

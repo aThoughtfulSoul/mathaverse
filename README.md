@@ -54,6 +54,8 @@ See the [setup guide](docs/LOCAL-SUBMISSION.md) for prerequisites, optional Lean
 
 Changes use validated transactions, with Undo, Save, Reopen, Export and Import. A saved visualization recipe can be reused with compatible mathematics.
 
+In VR, point a controller at the mathematics inspector and move its thumbstick up or down to scroll long claims and Lean receipts. A scrollbar shows your position; page controls remain available, and section headings stay with their content.
+
 ## How Meta Muse participates
 
 1. **Context:** the backend supplies the selected experiment, selection, exact computed facts and available actions to Muse.

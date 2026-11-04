@@ -196,8 +196,9 @@ export function wrapText(text: string, maxWidth: number, measure: (s: string) =>
   return out
 }
 
-/** Split blocks of given heights into pages no taller than maxHeight. A block that starts a section (`keep`)
- * stays with the block after it. A single block taller than a page gets its own page (never cut). */
+/** Split blocks of given heights into pages no taller than maxHeight. A block that starts a section (`keepWithNext`)
+ * stays with the block after it: when the two together are taller than a page, they share a page anyway (it scrolls),
+ * so a heading never sits alone. A single block taller than a page gets its own page (never cut; it scrolls). */
 export function paginate(blocks: readonly { height: number; keepWithNext?: boolean }[], maxHeight: number): number[][] {
   const pages: number[][] = []
   let page: number[] = []
@@ -213,6 +214,10 @@ export function paginate(blocks: readonly { height: number; keepWithNext?: boole
     }
     page.push(i)
     used += b.height
+    if (b.keepWithNext && i + 1 < blocks.length && used + blocks[i + 1]!.height > maxHeight) {
+      page.push(++i) // the heading's first item, too tall to follow it on this page: kept with it (the page scrolls)
+      used += blocks[i]!.height
+    }
   }
   if (page.length) pages.push(page)
   return pages.length ? pages : [[]]
